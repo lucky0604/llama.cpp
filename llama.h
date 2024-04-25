@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <map>
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -345,6 +346,33 @@ extern "C" {
         const char * role;
         const char * content;
     } llama_chat_message;
+
+    typedef struct functioncall_property_detail {
+        const char* type;
+        const char* description;
+    } functioncall_property;
+
+    typedef struct functioncall_properties {
+        const char* type;
+        functioncall_property* property_detail;
+    } functioncall_properties;
+
+    typedef struct functioncall_parameters {
+        const char* type;
+        const char* required;
+        const std::map<char, functioncall_properties> properties;
+    } functioncall_parameters;
+
+    typedef struct functioncall_func {
+        const char* name;
+        const char* description;
+        functioncall_parameters* parameters;
+    } functioncall_func;
+
+    typedef struct functioncall_message {
+        const char* type;
+        const char* function;
+    } functioncall_message;
 
     // Helpers for getting default parameters
     LLAMA_API struct llama_model_params llama_model_default_params(void);
@@ -849,6 +877,15 @@ extern "C" {
                                   bool   add_ass,
                                   char * buf,
                                int32_t   length);
+
+    LLAMA_API int32_t llama_chat_apply_functioncall_template(
+        const struct llama_model* model,
+        const char* tmpl,
+        const struct llama_chat_message* chat,
+        size_t   n_msg,
+        bool   add_ass,
+        char* buf,
+        int32_t   length, const struct functioncall_message * funcs, size_t func_msg);
 
     //
     // Grammar

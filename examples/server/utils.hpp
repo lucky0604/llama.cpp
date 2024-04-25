@@ -150,8 +150,77 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
     }
 
     const std::string formatted_chat(buf.data(), res);
-
+    std::cout << "formatted chat : " << formatted_chat << std::endl;
     LOG_VERBOSE("formatted_chat", {{"text", formatted_chat.c_str()}});
+
+    return formatted_chat;
+}
+
+// Format given chat. If tmpl is empty, we take the template from model metadata
+inline std::string format_tool_chat(const struct llama_model* model, const std::string& tmpl, const std::vector<json>& messages, const std::vector<json>& tools) {
+    size_t alloc_size = 0;
+    // vector holding all allocated string to be passed to llama_chat_apply_template
+    std::vector<std::string> str(messages.size() * 2);
+    std::vector<llama_chat_message> chat(messages.size());
+    std::vector<functioncall_message> funcs(tools.size());
+    std::vector<std::string> func_str(tools.size() * 2);
+
+    
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const auto& curr_msg = messages[i];
+        str[i * 2 + 0] = json_value(curr_msg, "role", std::string(""));
+        str[i * 2 + 1] = json_value(curr_msg, "content", std::string(""));
+        alloc_size += str[i * 2 + 1].length();
+        chat[i].role = str[i * 2 + 0].c_str();
+        chat[i].content = str[i * 2 + 1].c_str();
+    }
+
+    json default_obj = {};
+
+    for (size_t i = 0; i < tools.size(); ++i) {
+        const auto& curr_func = tools[i];
+        func_str[i * 2 + 0] = json_value(curr_func, "type", std::string(""));
+        func_str[i * 2 + 1] = json_value(curr_func, "function", default_obj).dump();
+
+        std::cout << " curr func " << curr_func << std::endl;
+        std::cout << " type str " << func_str[i * 2 + 0] << std::endl;
+        std::cout << " func str " << func_str[i * 2 + 1] << std::endl;
+
+        alloc_size += func_str[i * 2 + 1].length();
+        funcs[i].type = func_str[i * 2 + 0].c_str();
+        funcs[i].function = func_str[i * 2 + 1].c_str();
+    }
+
+    const char* ptr_tmpl = tmpl.empty() ? nullptr : tmpl.c_str();
+    std::vector<char> buf(alloc_size * 2);
+    std::cout << " buf size" << buf.size() << std::endl;
+    int32_t res;
+    if (tools.size() > 0) {
+        // run the first time to get the total output length
+        res = llama_chat_apply_functioncall_template(model, ptr_tmpl, chat.data(), chat.size(), true, buf.data(), buf.size(), funcs.data(), funcs.size());
+        // if it turns out that our buffer is too small, we resize it
+        if ((size_t)res > buf.size()) {
+            buf.resize(res);
+            res = llama_chat_apply_functioncall_template(model, ptr_tmpl, chat.data(), chat.size(), true, buf.data(), buf.size(), funcs.data(), funcs.size());
+        }
+    }
+    else {
+        // run the first time to get the total output length
+        res = llama_chat_apply_template(model, ptr_tmpl, chat.data(), chat.size(), true, buf.data(), buf.size());
+        // if it turns out that our buffer is too small, we resize it
+        if ((size_t)res > buf.size()) {
+            buf.resize(res);
+            res = llama_chat_apply_template(model, ptr_tmpl, chat.data(), chat.size(), true, buf.data(), buf.size());
+        }
+    }
+
+    
+
+    const std::string formatted_chat(buf.data(), res);
+
+    std::cout << "tools formatted chat : " << formatted_chat << std::endl;
+
+    LOG_VERBOSE("formatted_chat", { {"text", formatted_chat.c_str()} });
 
     return formatted_chat;
 }
@@ -373,7 +442,14 @@ static json oaicompat_completion_params_parse(
     llama_params["top_p"]             = json_value(body,   "top_p",             1.0);
 
     // Apply chat template to the list of messages
-    llama_params["prompt"] = format_chat(model, chat_template, body["messages"]);
+    if (body.contains("tool_choice") && body["tool_choice"] == "auto")
+    {
+        llama_params["prompt"] = format_tool_chat(model, "functioncall", body["messages"], body["tools"]);
+    }
+    else {
+        llama_params["prompt"] = format_chat(model, chat_template, body["messages"]);
+    }
+    
 
     // Handle "stop" field
     if (body.contains("stop") && body["stop"].is_string()) {
@@ -412,12 +488,15 @@ static json oaicompat_completion_params_parse(
     }
 
     // Params supported by OAI but unsupported by llama.cpp
-    static const std::vector<std::string> unsupported_params { "tools", "tool_choice" };
+    /*static const std::vector<std::string> unsupported_params { "tools", "tool_choice" };
     for (auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
         }
-    }
+    }*/
+
+    
+
 
     // Copy remaining properties to llama_params
     // This allows user to use llama.cpp-specific params like "mirostat", "tfs_z",... via OAI endpoint.
@@ -432,26 +511,77 @@ static json oaicompat_completion_params_parse(
     return llama_params;
 }
 
+std::string extract_json_between_tags(const std::string& str, const std::string& start_tag) {
+    size_t start_pos = str.find(start_tag);
+    if (start_pos == std::string::npos) {
+        return "";
+    }
+    start_pos += start_tag.size();
+    size_t end_pos = str.rfind("</functioncall>");
+    if (end_pos != std::string::npos && end_pos > start_pos)
+    {
+        end_pos += sizeof("</functioncall>");
+    }
+    else {
+        end_pos = str.size();
+    }
+    std::string json_str = str.substr(start_pos, end_pos - start_pos);
+    return json_str;
+}
+
 static json format_final_response_oaicompat(const json & request, json result, const std::string & completion_id, bool streaming = false) {
+    std::cout << " result : " << result << std::endl;
     bool stopped_word        = result.count("stopped_word") != 0;
     bool stopped_eos         = json_value(result, "stopped_eos", false);
     int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
     int num_prompt_tokens    = json_value(result, "tokens_evaluated", 0);
     std::string content      = json_value(result, "content", std::string(""));
+    std::vector<json> tool_calls;
 
+    if (content.find("<functioncall>")) {
+        content = nullptr;
+        std::string tool_str = extract_json_between_tags(content, "<functioncall>");
+        json tool_json = json::parse(tool_str);
+        tool_calls.push_back(tool_json);
+    }
+    
     std::string finish_reason = "length";
     if (stopped_word || stopped_eos) {
         finish_reason = "stop";
     }
 
-    json choices =
+    /*json choices =
         streaming ? json::array({json{{"finish_reason", finish_reason},
                                         {"index", 0},
                                         {"delta", json::object()}}})
                   : json::array({json{{"finish_reason", finish_reason},
                                         {"index", 0},
                                         {"message", json{{"content", content},
-                                                         {"role", "assistant"}}}}});
+                                                         {"role", "assistant"}
+                                                        }}}});*/
+    json choices;
+    if (streaming) {
+        choices = json::array({ json{{"finish_reason", finish_reason},
+                                        {"index", 0},
+                                        {"delta", json::object()}} });
+    }
+    else {
+        if (tool_calls.size() > 0) {
+            choices = json::array({ json{{"finish_reason", finish_reason},
+                                        {"index", 0},
+                                        {"message", json{{"content", content},
+                                                         {"role", "assistant"},
+                                                         {"tool_calls", tool_calls}
+                                                        }}} });
+        }
+        else {
+            choices = json::array({ json{{"finish_reason", finish_reason},
+                                        {"index", 0},
+                                        {"message", json{{"content", content},
+                                                         {"role", "assistant"}
+                                                        }}} });
+        }
+    }
 
     std::time_t t = std::time(0);
 
