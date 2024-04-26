@@ -832,7 +832,7 @@ struct server_context {
             slot.oaicompat = false;
             slot.oaicompat_model = "";
         }
-
+        
         slot.params.stream             = json_value(data, "stream",            false);
         slot.params.cache_prompt       = json_value(data, "cache_prompt",      false);
         slot.params.n_predict          = json_value(data, "n_predict",         default_params.n_predict);
@@ -1357,6 +1357,8 @@ struct server_context {
             {"tokens_cached",       slot.n_past},
             {"timings",             slot.get_formated_timings()}
         };
+        
+        
 
         if (slot.sparams.n_probs > 0) {
             std::vector<completion_token_output> probs;
@@ -3504,7 +3506,9 @@ int main(int argc, char ** argv) {
     const auto handle_chat_completions = [&ctx_server, &sparams, &res_error](const httplib::Request & req, httplib::Response & res) {
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), sparams.chat_template);
-
+        if (data["tool_choice"] == "auto" && json_value(data, "stream", true)) {
+            data["stream"] = false;
+        }
         const int id_task = ctx_server.queue_tasks.get_new_id();
 
         ctx_server.queue_results.add_waiting_task_id(id_task);
@@ -3512,6 +3516,7 @@ int main(int argc, char ** argv) {
 
         const auto completion_id = gen_chatcmplid();
         if (!json_value(data, "stream", false)) {
+            std::cout << " not stream " << std::endl;
             server_task_result result = ctx_server.queue_results.recv(id_task);
 
             if (!result.error && result.stop) {

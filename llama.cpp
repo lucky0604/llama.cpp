@@ -17253,11 +17253,13 @@ static int32_t llama_chat_apply_functioncall_template_internal(
                 ss << "> Tool Name: " << f_json["name"] << "\n- Tool Description: " << f_json["description"] << "\n";
             }
         }
+        ss << "Use the following format if using a tool:\n" << "```<functioncall>{\"name\": \"tool name(one of [tools name])\", \"arguments\": {\"key (one of [tools args])\": \"value (tools args value)\", ...}</functioncall>```";
+        ss << "If there is no tool that matches the user request, you will respond politely that you cannot help.<reserved_106>";
         for (auto msg : chat) {
             ss << "Answer my qustion " << msg->role << "\n" << msg->content << "\n";
         }
         if (add_ass) {
-            ss << "<|im_start|>asssitant\n";
+            ss << "\r\nasssitant<reserved_107>";
         }
     }
     else if (tmpl == "llama2" || tmpl.find("[INST]") != std::string::npos) {

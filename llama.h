@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
-#include <map>
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -346,28 +345,6 @@ extern "C" {
         const char * role;
         const char * content;
     } llama_chat_message;
-
-    typedef struct functioncall_property_detail {
-        const char* type;
-        const char* description;
-    } functioncall_property;
-
-    typedef struct functioncall_properties {
-        const char* type;
-        functioncall_property* property_detail;
-    } functioncall_properties;
-
-    typedef struct functioncall_parameters {
-        const char* type;
-        const char* required;
-        const std::map<char, functioncall_properties> properties;
-    } functioncall_parameters;
-
-    typedef struct functioncall_func {
-        const char* name;
-        const char* description;
-        functioncall_parameters* parameters;
-    } functioncall_func;
 
     typedef struct functioncall_message {
         const char* type;

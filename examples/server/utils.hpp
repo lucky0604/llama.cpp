@@ -517,33 +517,64 @@ std::string extract_json_between_tags(const std::string& str, const std::string&
         return "";
     }
     start_pos += start_tag.size();
-    size_t end_pos = str.rfind("</functioncall>");
-    if (end_pos != std::string::npos && end_pos > start_pos)
-    {
-        end_pos += sizeof("</functioncall>");
+    size_t end_pos = str.find("</functioncall>", start_pos);
+
+    if (end_pos == std::string::npos) {
+        // 如果没有找到结束标签，返回空字符串
+        return "";
     }
-    else {
-        end_pos = str.size();
-    }
+
+    // 提取从start_pos到end_pos之间的字符串
     std::string json_str = str.substr(start_pos, end_pos - start_pos);
     return json_str;
 }
 
 static json format_final_response_oaicompat(const json & request, json result, const std::string & completion_id, bool streaming = false) {
-    std::cout << " result : " << result << std::endl;
     bool stopped_word        = result.count("stopped_word") != 0;
     bool stopped_eos         = json_value(result, "stopped_eos", false);
     int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
     int num_prompt_tokens    = json_value(result, "tokens_evaluated", 0);
     std::string content      = json_value(result, "content", std::string(""));
     std::vector<json> tool_calls;
+    json tool_calls_obj;
 
-    if (content.find("<functioncall>")) {
-        content = nullptr;
+    std::cout << " ------- content ----------" << content << std::endl;
+
+    std::size_t found_pos = content.find("<functioncall>");
+    std::cout << "Position: " << found_pos << std::endl;
+
+    if (content.find("<functioncall>") != std::string::npos) {
         std::string tool_str = extract_json_between_tags(content, "<functioncall>");
-        json tool_json = json::parse(tool_str);
-        tool_calls.push_back(tool_json);
+        // 将包含单引号的部分转换为双引号
+        size_t pos = tool_str.find("'{\"");
+        if (pos != std::string::npos) {
+            tool_str.replace(pos, 3, "{\"");
+        }
+        size_t pos2 = tool_str.find("\"}'");
+        if (pos2 != std::string::npos) {
+            tool_str.replace(pos2, 3, "\"}");
+        }
+
+        // 删除额外的双引号
+        size_t pos3 = tool_str.find("\"\"");
+        while (pos3 != std::string::npos) {
+            tool_str.replace(pos3, 2, "\"");
+            pos3 = tool_str.find("\"\"", pos3 + 1);
+        }
+        std::cout << " tool_str : " << tool_str << std::endl;
+        try {
+            json tool_json = json::parse(tool_str);
+            tool_calls_obj["id"] = std::string("call_") + random_string();
+            tool_calls_obj["type"] = std::string("function");
+            tool_calls_obj["function"] = tool_json;
+            tool_calls.push_back(tool_calls_obj);
+            std::cout << " tool json: " << tool_json.dump() << std::endl;
+        } catch (const json::parse_error &e) {
+            std::cout << " parse error " << e.what() << " at byte " << e.byte << std::endl;
+        }
     }
+
+    std::cout << " tool calls : " << tool_calls << std::endl;
     
     std::string finish_reason = "length";
     if (stopped_word || stopped_eos) {
@@ -560,16 +591,16 @@ static json format_final_response_oaicompat(const json & request, json result, c
                                                          {"role", "assistant"}
                                                         }}}});*/
     json choices;
-    if (streaming) {
+    if (streaming && tool_calls.size() == 0) {
         choices = json::array({ json{{"finish_reason", finish_reason},
                                         {"index", 0},
                                         {"delta", json::object()}} });
-    }
-    else {
+
+    } else {
         if (tool_calls.size() > 0) {
             choices = json::array({ json{{"finish_reason", finish_reason},
                                         {"index", 0},
-                                        {"message", json{{"content", content},
+                                        {"message", json{{"content", nullptr},
                                                          {"role", "assistant"},
                                                          {"tool_calls", tool_calls}
                                                         }}} });
